@@ -1,0 +1,50 @@
+# ITCMS - Appian Deployment Pipeline
+# Azure DevOps CI/CD Pipeline
+# Author: Raja
+
+trigger:
+  branches:
+    include:
+      - main
+      - release/*
+
+variables:
+  - group: ITCMS-Pipeline-Variables
+
+stages:
+  - stage: Export
+    displayName: "Export Appian Package"
+    jobs:
+      - job: ExportPackage
+        displayName: "Export from Source Environment"
+        steps:
+          - script: echo "TODO - Phase 3 implementation"
+
+  - stage: DeployDev
+    displayName: "Deploy to DEV"
+    dependsOn: Export
+    jobs:
+      - job: ImportToDev
+        steps:
+          - script: echo "TODO - Phase 3 implementation"
+
+  - stage: DeployTest
+    displayName: "Deploy to TEST"
+    dependsOn: DeployDev
+    condition: succeeded()
+    jobs:
+      - job: ImportToTest
+        steps:
+          - script: echo "TODO - Phase 3 implementation"
+
+  - stage: DeployProd
+    displayName: "Deploy to PROD"
+    dependsOn: DeployTest
+    jobs:
+      - deployment: ProductionDeploy
+        environment: "PRODUCTION"
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - script: echo "TODO - Phase 3 implementation"
