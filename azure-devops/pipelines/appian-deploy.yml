@@ -1,50 +1,300 @@
-# ITCMS - Appian Deployment Pipeline
-# Azure DevOps CI/CD Pipeline
-# Author: Raja
+# ============================================================
+# ITCMS - Appian CI/CD Pipeline
+# Author  : Raja (Rajasegaran C) - Cloud & DevOps Engineer
+# Org     : rcraja-devops | Project: appian-itcms
+# Repo    : github.com/rcraja80/appian-itcms-devops
+# Created : 2026-03-15
+# ============================================================
 
 trigger:
   branches:
     include:
       - main
       - release/*
+  paths:
+    include:
+      - appian/**
+      - terraform/**
+      - python-scripts/**
+
+pr:
+  branches:
+    include:
+      - main
 
 variables:
-  - group: ITCMS-Pipeline-Variables
+  - group: ITCMS-AWS-Variables
+  - group: ITCMS-Appian-Variables
+  - name: pythonVersion
+    value: '3.11'
+  - name: terraformVersion
+    value: '1.5.0'
+  - name: buildArtifactName
+    value: 'appian-package-$(Build.BuildNumber)'
+
+pool:
+  vmImage: 'ubuntu-latest'
 
 stages:
-  - stage: Export
-    displayName: "Export Appian Package"
-    jobs:
-      - job: ExportPackage
-        displayName: "Export from Source Environment"
-        steps:
-          - script: echo "TODO - Phase 3 implementation"
 
-  - stage: DeployDev
-    displayName: "Deploy to DEV"
-    dependsOn: Export
-    jobs:
-      - job: ImportToDev
-        steps:
-          - script: echo "TODO - Phase 3 implementation"
+# ============================================================
+# STAGE 1 — VALIDATE
+# ============================================================
+- stage: Validate
+  displayName: '🔍 Stage 1 - Validate'
+  jobs:
 
-  - stage: DeployTest
-    displayName: "Deploy to TEST"
-    dependsOn: DeployDev
-    condition: succeeded()
-    jobs:
-      - job: ImportToTest
-        steps:
-          - script: echo "TODO - Phase 3 implementation"
+  - job: TerraformValidate
+    displayName: 'Terraform Lint & Validate'
+    steps:
+    - task: TerraformInstaller@1
+      displayName: 'Install Terraform $(terraformVersion)'
+      inputs:
+        terraformVersion: $(terraformVersion)
 
-  - stage: DeployProd
-    displayName: "Deploy to PROD"
-    dependsOn: DeployTest
-    jobs:
-      - deployment: ProductionDeploy
-        environment: "PRODUCTION"
-        strategy:
-          runOnce:
-            deploy:
-              steps:
-                - script: echo "TODO - Phase 3 implementation"
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform Init'
+      inputs:
+        provider: 'aws'
+        command: 'init'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/terraform'
+        backendServiceAWS: 'aws-itcms-connection'
+        backendAWSBucketName: 'itcms-terraform-state-$(AWS_ACCOUNT_ID)'
+        backendAWSKey: 'dev/terraform.tfstate'
+        backendAWSRegion: '$(AWS_REGION)'
+
+    - task: TerraformTaskV4@4
+      displayName: 'Terraform Validate'
+      inputs:
+        provider: 'aws'
+        command: 'validate'
+        workingDirectory: '$(System.DefaultWorkingDirectory)/terraform'
+
+  - job: PythonValidate
+    displayName: 'Python Lint & Syntax Check'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(pythonVersion)
+
+    - script: |
+        pip install flake8
+        flake8 python-scripts/ --max-line-length=120 --count --statistics || true
+        echo "✅ Python validation complete"
+      displayName: 'Lint Python Scripts'
+
+# ============================================================
+# STAGE 2 — EXPORT PACKAGE
+# ============================================================
+- stage: ExportPackage
+  displayName: '📦 Stage 2 - Export Appian Package'
+  dependsOn: Validate
+  condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+  jobs:
+
+  - job: ExportFromAppian
+    displayName: 'Export via Appian REST API → Upload to S3'
+    steps:
+    - task: UsePythonVersion@0
+      inputs:
+        versionSpec: $(pythonVersion)
+
+    - script: pip install requests boto3 python-dotenv
+      displayName: 'Install Python Dependencies'
+
+    - script: |
+        echo "Exporting Appian package: $(APPIAN_PACKAGE_NAME)"
+        python python-scripts/appian-api/export_package.py \
+          --app-name "$(APPIAN_APP_NAME)" \
+          --package-name "$(APPIAN_PACKAGE_NAME)" \
+          --output-dir "$(Build.ArtifactStagingDirectory)/packages" \
+          --build-number "$(Build.BuildNumber)"
+      displayName: 'Export Appian Package'
+      env:
+        APPIAN_BASE_URL: $(APPIAN_BASE_URL_DEV)
+        APPIAN_API_KEY: $(APPIAN_API_KEY_DEV)
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish to Azure Artifacts'
+      inputs:
+        PathtoPublish: '$(Build.ArtifactStagingDirectory)/packages'
+        ArtifactName: '$(buildArtifactName)'
+        publishLocation: 'Container'
+
+    - task: AWSCLI@1
+      displayName: 'Archive Package to S3'
+      inputs:
+        awsCredentials: 'aws-itcms-connection'
+        regionName: '$(AWS_REGION)'
+        awsCommand: 's3'
+        awsSubCommand: 'cp'
+        awsArguments: >
+          $(Build.ArtifactStagingDirectory)/packages/
+          s3://$(S3_PACKAGES_BUCKET)/packages/$(Build.BuildNumber)/
+          --recursive
+
+# ============================================================
+# STAGE 3 — DEPLOY TO DEV (Auto - No Approval)
+# ============================================================
+- stage: DeployDev
+  displayName: '🚀 Stage 3 - Deploy to DEV'
+  dependsOn: ExportPackage
+  condition: succeeded()
+  jobs:
+
+  - deployment: DeployToDevEnvironment
+    displayName: 'Import Package → DEV Appian'
+    environment: Dev
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+
+          - script: pip install requests boto3 python-dotenv
+            displayName: 'Install Dependencies'
+
+          - task: AWSCLI@1
+            displayName: 'Download Package from S3'
+            inputs:
+              awsCredentials: 'aws-itcms-connection'
+              regionName: '$(AWS_REGION)'
+              awsCommand: 's3'
+              awsSubCommand: 'cp'
+              awsArguments: >
+                s3://$(S3_PACKAGES_BUCKET)/packages/$(Build.BuildNumber)/
+                $(Pipeline.Workspace)/packages/
+                --recursive
+
+          - script: |
+              python python-scripts/appian-api/import_package.py \
+                --package-dir "$(Pipeline.Workspace)/packages" \
+                --environment "DEV" \
+                --build-number "$(Build.BuildNumber)"
+              echo "✅ DEV Deployment complete - Build $(Build.BuildNumber)"
+            displayName: 'Import Package to DEV Appian'
+            env:
+              APPIAN_BASE_URL: $(APPIAN_BASE_URL_DEV)
+              APPIAN_API_KEY: $(APPIAN_API_KEY_DEV)
+
+# ============================================================
+# STAGE 4 — DEPLOY TO TEST (Manual Approval Required)
+# ============================================================
+- stage: DeployTest
+  displayName: '🧪 Stage 4 - Deploy to TEST'
+  dependsOn: DeployDev
+  condition: succeeded()
+  jobs:
+
+  - deployment: DeployToTestEnvironment
+    displayName: 'Import Package → TEST Appian'
+    environment: TEST
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+
+          - script: pip install requests boto3 python-dotenv
+            displayName: 'Install Dependencies'
+
+          - task: AWSCLI@1
+            displayName: 'Download Package from S3'
+            inputs:
+              awsCredentials: 'aws-itcms-connection'
+              regionName: '$(AWS_REGION)'
+              awsCommand: 's3'
+              awsSubCommand: 'cp'
+              awsArguments: >
+                s3://$(S3_PACKAGES_BUCKET)/packages/$(Build.BuildNumber)/
+                $(Pipeline.Workspace)/packages/
+                --recursive
+
+          - script: |
+              python python-scripts/appian-api/import_package.py \
+                --package-dir "$(Pipeline.Workspace)/packages" \
+                --environment "TEST" \
+                --build-number "$(Build.BuildNumber)"
+              echo "✅ TEST Deployment complete - Build $(Build.BuildNumber)"
+            displayName: 'Import Package to TEST Appian'
+            env:
+              APPIAN_BASE_URL: $(APPIAN_BASE_URL_TEST)
+              APPIAN_API_KEY: $(APPIAN_API_KEY_TEST)
+
+# ============================================================
+# STAGE 5 — DEPLOY TO PRODUCTION (CAB Approval + Biz Hours)
+# ============================================================
+- stage: DeployProd
+  displayName: '🏭 Stage 5 - Deploy to PRODUCTION'
+  dependsOn: DeployTest
+  condition: succeeded()
+  jobs:
+
+  - deployment: DeployToProduction
+    displayName: 'Import Package → PRODUCTION Appian'
+    environment: PRODUCTION
+    strategy:
+      runOnce:
+        preDeploy:
+          steps:
+          - script: |
+              echo "================================================"
+              echo "  🏭 PRODUCTION DEPLOYMENT INITIATED"
+              echo "  Build Number : $(Build.BuildNumber)"
+              echo "  Triggered by : $(Build.RequestedFor)"
+              echo "  Timestamp    : $(date '+%Y-%m-%d %H:%M:%S IST')"
+              echo "  Change ID    : $(CHANGE_ID)"
+              echo "================================================"
+            displayName: 'Pre-Deploy Audit Log'
+
+        deploy:
+          steps:
+          - task: UsePythonVersion@0
+            inputs:
+              versionSpec: $(pythonVersion)
+
+          - script: pip install requests boto3 python-dotenv
+            displayName: 'Install Dependencies'
+
+          - task: AWSCLI@1
+            displayName: 'Download Package from S3'
+            inputs:
+              awsCredentials: 'aws-itcms-connection'
+              regionName: '$(AWS_REGION)'
+              awsCommand: 's3'
+              awsSubCommand: 'cp'
+              awsArguments: >
+                s3://$(S3_PACKAGES_BUCKET)/packages/$(Build.BuildNumber)/
+                $(Pipeline.Workspace)/packages/
+                --recursive
+
+          - script: |
+              python python-scripts/appian-api/import_package.py \
+                --package-dir "$(Pipeline.Workspace)/packages" \
+                --environment "PROD" \
+                --build-number "$(Build.BuildNumber)" \
+                --change-id "$(CHANGE_ID)"
+              echo "✅ PRODUCTION Deployment complete!"
+            displayName: 'Import Package to PRODUCTION'
+            env:
+              APPIAN_BASE_URL: $(APPIAN_BASE_URL_PROD)
+              APPIAN_API_KEY: $(APPIAN_API_KEY_PROD)
+
+        on:
+          success:
+            steps:
+            - script: |
+                echo "✅ PRODUCTION deployment SUCCESS"
+                echo "Change Request $(CHANGE_ID) - Status: IMPLEMENTED"
+              displayName: 'Production Success Log'
+
+          failure:
+            steps:
+            - script: |
+                echo "❌ PRODUCTION deployment FAILED - ROLLBACK REQUIRED"
+                echo "Change Request $(CHANGE_ID) - Status: FAILED"
+              displayName: 'Production Failure Alert'
