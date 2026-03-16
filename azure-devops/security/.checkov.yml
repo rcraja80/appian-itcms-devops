@@ -1,0 +1,23 @@
+# ============================================================
+# ITCMS - Checkov IaC Security Configuration
+# Author : Raja (Rajasegaran C) - Cloud & DevOps Engineer
+# Tool   : Checkov by Bridgecrew
+# ============================================================
+
+# Directories to scan
+directory:
+  - terraform/
+
+# Skip these checks (documented exceptions for dev environment)
+skip-check:
+  - CKV_AWS_8    # EC2 detailed monitoring - cost consideration in dev
+  - CKV_AWS_126  # EC2 detailed monitoring duplicate
+  - CKV_AWS_135  # EC2 EBS deletion on termination - intentional in dev
+  - CKV2_AWS_41  # IAM admin policy - pipeline user needs broad access
+  - CKV_AWS_144  # S3 cross-region replication - not needed in dev
+
+# Output format
+output: cli
+
+# Soft fail - report issues but don't block pipeline in dev
+soft-fail: true

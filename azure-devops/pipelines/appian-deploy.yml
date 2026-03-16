@@ -36,11 +36,13 @@ pool:
   vmImage: 'ubuntu-latest'
 
 stages:
+security_stage content
 
 # ============================================================
 # STAGE 1 — VALIDATE
 # ============================================================
 - stage: Validate
+  dependsOn: SecurityScan
   displayName: '🔍 Stage 1 - Validate'
   jobs:
 

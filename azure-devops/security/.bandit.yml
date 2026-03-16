@@ -1,0 +1,22 @@
+# ============================================================
+# ITCMS - Bandit Python Security Configuration
+# Author : Raja (Rajasegaran C) - Cloud & DevOps Engineer
+# ============================================================
+
+# Directories to scan
+targets:
+  - python-scripts/
+
+# Exclude test files
+exclude_dirs:
+  - python-scripts/tests/
+  - .git/
+
+# Skip these low-severity checks for dev
+skips:
+  - B104   # Binding to all interfaces - acceptable in dev
+  - B311   # Random module - not used for crypto in our scripts
+
+# Severity threshold: only report MEDIUM and HIGH
+level: MEDIUM
+confidence: MEDIUM
