@@ -75,3 +75,14 @@ output "pipeline_user_secret_key" {
   value       = module.iam.pipeline_user_secret_key
   sensitive   = true
 }
+
+# --- Monitoring ---
+output "cloudwatch_dashboard_url" {
+  description = "CloudWatch Dashboard URL"
+  value       = module.monitoring.dashboard_url
+}
+
+output "sns_alerts_topic_arn" {
+  description = "SNS Alert Topic ARN"
+  value       = module.monitoring.sns_topic_arn
+}

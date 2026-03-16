@@ -75,3 +75,17 @@ module "rds" {
   db_instance_class   = var.db_instance_class
   db_password         = var.db_password
 }
+
+# ============================================================
+# MONITORING MODULE — CloudWatch + SNS Alerts
+# ============================================================
+module "monitoring" {
+  source = "./modules/monitoring"
+
+  environment    = var.environment
+  project        = var.project_name
+  aws_region     = var.aws_region
+  ec2_instance_id = module.ec2.instance_id
+  rds_instance_id = var.rds_instance_id
+  alert_email    = "dgp.pon.gov.in@gmail.com"
+}
